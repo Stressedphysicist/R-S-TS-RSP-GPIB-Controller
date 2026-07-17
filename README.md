@@ -5,13 +5,18 @@ This is a very barebones GUI to enable switching of the different ports in a Roh
 - `gui.py` is a GUI inspired in the EMS-K1/ES-K1 software from Rohde & Schwarz
 - `paths.json` is a json file that stores pre-configured paths for the TS-RSP
 
-## Uso
+## Use
 
-```python
+Install the required packages in `requirements.txt` and then:
 
+Start the API 
+```bash
 uvicorn app:app --host 0.0.0.0 --port 8001
-python gui.py
+```
 
+Open the GUI
+```bash
+python gui.py
 ```
 
 
