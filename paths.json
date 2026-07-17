@@ -1,0 +1,24 @@
+{
+    "Test_1": {
+        "board": "RSP-MMF",
+        "relays": {
+            "K21": "4",
+            "K22": "6"
+        }
+    },
+    "Test_2": {
+        "board": "RSP-BRF",
+        "relays": {
+            "K31": "3",
+            "K32": "1",
+            "K33": "5",
+            "K34": "1"
+        }
+    },
+    "Horizontal": {
+        "board": "RSP-EMS",
+        "relays": {
+            "K1": "NO"
+        }
+    }
+}
