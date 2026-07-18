@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 import pyvisa
 
 app = FastAPI(title="Dynamic Rohde & Schwarz TS-RSP Controller API")
@@ -53,12 +54,19 @@ class TSRSP_Controller:
             inst.write(cmd)
         print(f"[{gpib_address}] Executed: {cmd}")
 
-    def set_relay(self, gpib_address: str, register_address: int, bit_hex_value: int, state: bool):
+    def set_relay(self, gpib_address: str, register_address: int, bit_hex_value: int, state: bool, clear_mask: int = 0):
         """Safely toggles bits using a discrete buffer per instrument."""
         regs = self._get_registers(gpib_address)
         current_val = regs[register_address]
         
-        new_val = current_val | bit_hex_value if state else current_val & ~bit_hex_value
+        new_val = current_val
+        
+        # 1. Apply mutual exclusion mask first (Clear previous paths)
+        if clear_mask:
+            new_val &= ~clear_mask
+            
+        # 2. Apply the specific target state
+        new_val = new_val | bit_hex_value if state else new_val & ~bit_hex_value
         
         if new_val != current_val:
             regs[register_address] = new_val
@@ -76,6 +84,7 @@ class RelayRequest(BaseMatrixRequest):
     register: str  
     bit_value: str 
     state: bool    
+    clear_mask: Optional[str] = None
 
 
 # --- API Endpoints ---
@@ -94,9 +103,12 @@ def initialize(req: BaseMatrixRequest):
 @app.post("/relay/set")
 def set_relay(req: RelayRequest):
     """Directly toggle an individual bit on a specific register."""
+    print(f"\n[INCOMING REQUEST PAYLOAD] -> {req.model_dump_json(indent=2)}\n")
+
     try:
         reg_int = int(req.register, 16)
         bit_int = int(req.bit_value, 16)
+        clear_int = int(req.clear_mask, 16) if req.clear_mask else 0
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid Hex formatting. Use string format '0x95'.")
 
@@ -104,7 +116,7 @@ def set_relay(req: RelayRequest):
     if reg_int not in matrix._get_registers(req.gpib_address):
          raise HTTPException(status_code=400, detail="Invalid register address.")
 
-    matrix.set_relay(req.gpib_address, reg_int, bit_int, req.state)
+    matrix.set_relay(req.gpib_address, reg_int, bit_int, req.state, clear_int)
     regs = matrix._get_registers(req.gpib_address)
     return {"status": "success", "gpib": req.gpib_address, "register": req.register, "new_value": f"0x{regs[reg_int]:02X}"}
 

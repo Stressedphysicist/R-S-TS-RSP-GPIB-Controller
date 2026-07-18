@@ -118,11 +118,19 @@ class RelayBox(QFrame):
         self.callback(self.relay_name, self.config, selected_option, is_checked)
 
     def set_state_silently(self, is_enabled, selected_option=None):
+        """Sets the UI state without triggering the live API callback."""
         self.is_updating = True
         self.enable_checkbox.setChecked(is_enabled)
         self.toggle_ui_state(is_enabled)
-        if selected_option and selected_option in self.radios:
+        
+        if is_enabled and selected_option and selected_option in self.radios:
             self.radios[selected_option].setChecked(True)
+        elif not is_enabled:
+            # Force-reset to the default startup option (NC or Path 1)
+            default_button = self.radio_group.button(0)
+            if default_button:
+                default_button.setChecked(True)
+                
         self.is_updating = False
 
 
@@ -153,6 +161,9 @@ class TS_RSP_Live_GUI(QWidget):
         self.setup_bottom_bar()
         self.draw_relay_grid() 
         self.refresh_paths_list()
+
+        # --- Automated Global Initialization Sequence ---
+        self.clear_ui()
 
     def setup_paths_list(self):
         self.paths_list = QListWidget()
@@ -248,23 +259,27 @@ class TS_RSP_Live_GUI(QWidget):
                 
         elif config["type"] == "SPNT":
             try:
-                # MANDATORY PROTOCOL: Clear all paths on this relay to prevent conflict
-                for path, bit_val in config["paths"].items():
-                    payload = {
-                        "gpib_address": GPIB_ADDRESS,
-                        "register": config["reg"],
-                        "bit_value": bit_val,
-                        "state": False
-                    }
-                    requests.post(f"{API_BASE_URL}/relay/set", json=payload)
+                # Calculate the hardware mask for all possible paths on this specific relay
+                mask = sum(int(v, 16) for v in config["paths"].values())
                 
-                # Activate selected path strictly if enabled
                 if is_enabled and selected_option in config["paths"]:
+                    # Transmit exactly ONE request containing the True state and the clearing mask
                     payload = {
                         "gpib_address": GPIB_ADDRESS,
                         "register": config["reg"],
                         "bit_value": config["paths"][selected_option],
-                        "state": True
+                        "state": True,
+                        "clear_mask": hex(mask)
+                    }
+                    requests.post(f"{API_BASE_URL}/relay/set", json=payload)
+                elif not is_enabled:
+                    # If manually toggled completely OFF via checkbox, wipe the entire relay mask
+                    payload = {
+                        "gpib_address": GPIB_ADDRESS,
+                        "register": config["reg"],
+                        "bit_value": "0x00",
+                        "state": False,
+                        "clear_mask": hex(mask)
                     }
                     requests.post(f"{API_BASE_URL}/relay/set", json=payload)
             except Exception as e:
@@ -323,13 +338,13 @@ class TS_RSP_Live_GUI(QWidget):
         print(f"--- Enacting Macro Path Protocol: {path_name} ---")
         for name, widget in self.relay_widgets.items():
             if name in data["relays"]:
+                # Execute targeted commands for stated relays
                 selected_opt = data["relays"][name]
                 widget.set_state_silently(True, selected_opt)
                 self.live_api_call(name, widget.config, selected_opt, True)
             else:
+                # Silently disengage UI element without transmitting a hardware override
                 widget.set_state_silently(False)
-                default_opt = widget.radio_group.checkedButton().text()
-                self.live_api_call(name, widget.config, default_opt, False)
 
     def delete_selected_path(self):
         item = self.paths_list.currentItem()
@@ -341,13 +356,27 @@ class TS_RSP_Live_GUI(QWidget):
                 self.refresh_paths_list()
 
     def clear_ui(self):
+        print("--- Initiating Global Initialization Sequence ---")
+        
+        # 1. Transmit matrix purge command to API
+        payload = {"gpib_address": GPIB_ADDRESS}
+        try:
+            response = requests.post(f"{API_BASE_URL}/initialize", json=payload)
+            if response.status_code == 200:
+                print("Matrix Initialization Complete: All hardware registers cleared.")
+            else:
+                print(f"Matrix Initialization Error: {response.text}")
+        except Exception as e:
+            print(f"API Error during initialization: {e}")
+
+        # 2. Synchronize local GUI states to match hardware baseline
         for widget in self.relay_widgets.values():
             widget.set_state_silently(False)
         self.path_input.clear()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyle("Windows") 
+    app.setStyle("WindowsXP") 
     window = TS_RSP_Live_GUI()
     window.show()
     sys.exit(app.exec())
