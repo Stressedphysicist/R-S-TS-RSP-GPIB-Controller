@@ -1,3 +1,4 @@
+import threading
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -8,22 +9,34 @@ app = FastAPI(title="Dynamic Rohde & Schwarz TS-RSP Controller API")
 # --- Core Hardware Controller Logic ---
 class TSRSP_Controller:
     def __init__(self, board_address=0x10):
-        self.rm = pyvisa.ResourceManager()
+        # Initialize rm to None to avoid import-time crashes if VISA is missing
+        self.rm = None
+        # board_address 0x10 (16) is the default hardware address for TS-RSP
         self.board_address = board_address
         
         # Dictionaries to track independent states and connections per GPIB address
         self.state_buffers = {}
         self.instruments = {}
+        self.locks = {}
+
+    def _get_lock(self, gpib_address: str):
+        if gpib_address not in self.locks:
+            self.locks[gpib_address] = threading.Lock()
+        return self.locks[gpib_address]
 
     def _get_instrument(self, gpib_address: str):
         """Fetches or opens a VISA connection for a specific address."""
+        if self.rm is None:
+            self.rm = pyvisa.ResourceManager()
+
         if gpib_address not in self.instruments:
             try:
                 self.instruments[gpib_address] = self.rm.open_resource(gpib_address)
-            except Exception:
-                self.instruments[gpib_address] = None
-                print(f"WARNING: Operating in SIMULATION mode for {gpib_address}.")
-        return self.instruments[gpib_address]
+            except Exception as e:
+                print(f"WARNING: Failed to connect to {gpib_address}. Error: {e}")
+                print(f"Operating in SIMULATION mode for {gpib_address}.")
+                return None
+        return self.instruments.get(gpib_address)
 
     def _get_registers(self, gpib_address: str):
         """Fetches or initializes the state buffer for a specific address."""
@@ -37,10 +50,11 @@ class TSRSP_Controller:
 
     def initialize_system(self, gpib_address: str):
         """Cleans all output registers to defined state 0x00 for a given address."""
-        regs = self._get_registers(gpib_address)
-        for reg in regs.keys():
-            regs[reg] = 0x00
-            self._write_register(gpib_address, reg)
+        with self._get_lock(gpib_address):
+            regs = self._get_registers(gpib_address)
+            for reg in regs.keys():
+                regs[reg] = 0x00
+                self._write_register(gpib_address, reg)
             
     def _write_register(self, gpib_address: str, register_address: int):
         """Builds and sends the WD command."""
@@ -56,21 +70,25 @@ class TSRSP_Controller:
 
     def set_relay(self, gpib_address: str, register_address: int, bit_hex_value: int, state: bool, clear_mask: int = 0):
         """Safely toggles bits using a discrete buffer per instrument."""
-        regs = self._get_registers(gpib_address)
-        current_val = regs[register_address]
-        
-        new_val = current_val
-        
-        # 1. Apply mutual exclusion mask first (Clear previous paths)
-        if clear_mask:
-            new_val &= ~clear_mask
+        with self._get_lock(gpib_address):
+            regs = self._get_registers(gpib_address)
+            current_val = regs[register_address]
             
-        # 2. Apply the specific target state
-        new_val = new_val | bit_hex_value if state else new_val & ~bit_hex_value
-        
-        if new_val != current_val:
-            regs[register_address] = new_val
-            self._write_register(gpib_address, register_address)
+            new_val = current_val
+            
+            # 1. Apply mutual exclusion mask first (Clear previous paths)
+            if clear_mask:
+                new_val &= (~clear_mask) & 0xFF
+                
+            # 2. Apply the specific target state
+            if state:
+                new_val |= bit_hex_value
+            else:
+                new_val &= (~bit_hex_value) & 0xFF
+            
+            if new_val != current_val:
+                regs[register_address] = new_val
+                self._write_register(gpib_address, register_address)
 
 # Initialize the hardware controller singleton
 matrix = TSRSP_Controller()

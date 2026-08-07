@@ -9,9 +9,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-API_BASE_URL = "http://localhost:8001"
-GPIB_ADDRESS = "GPIB0::3::INSTR"
-PATHS_FILE = "paths.json"
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8001")
+GPIB_ADDRESS = os.environ.get("GPIB_ADDRESS", "GPIB0::3::INSTR")
+PATHS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paths.json")
 
 # --- Hardware Configuration Dictionary ---
 BOARD_CONFIGS = {
@@ -253,7 +253,7 @@ class TS_RSP_Live_GUI(QWidget):
                 "state": state_bool
             }
             try:
-                requests.post(f"{API_BASE_URL}/relay/set", json=payload)
+                requests.post(f"{API_BASE_URL}/relay/set", json=payload, timeout=2.0)
             except Exception as e:
                 print(f"API Error: {e}")
                 
@@ -271,7 +271,7 @@ class TS_RSP_Live_GUI(QWidget):
                         "state": True,
                         "clear_mask": hex(mask)
                     }
-                    requests.post(f"{API_BASE_URL}/relay/set", json=payload)
+                    requests.post(f"{API_BASE_URL}/relay/set", json=payload, timeout=2.0)
                 elif not is_enabled:
                     # If manually toggled completely OFF via checkbox, wipe the entire relay mask
                     payload = {
@@ -281,14 +281,18 @@ class TS_RSP_Live_GUI(QWidget):
                         "state": False,
                         "clear_mask": hex(mask)
                     }
-                    requests.post(f"{API_BASE_URL}/relay/set", json=payload)
+                    requests.post(f"{API_BASE_URL}/relay/set", json=payload, timeout=2.0)
             except Exception as e:
                 print(f"API Error: {e}")
 
     def load_paths_from_json(self):
         if os.path.exists(PATHS_FILE):
             with open(PATHS_FILE, "r") as f:
-                return json.load(f)
+                try:
+                    return json.load(f)
+                except json.JSONDecodeError:
+                    print("WARNING: paths.json is corrupted. Starting with empty paths.")
+                    return {}
         return {}
 
     def save_paths_to_json(self):
@@ -361,7 +365,7 @@ class TS_RSP_Live_GUI(QWidget):
         # 1. Transmit matrix purge command to API
         payload = {"gpib_address": GPIB_ADDRESS}
         try:
-            response = requests.post(f"{API_BASE_URL}/initialize", json=payload)
+            response = requests.post(f"{API_BASE_URL}/initialize", json=payload, timeout=2.0)
             if response.status_code == 200:
                 print("Matrix Initialization Complete: All hardware registers cleared.")
             else:
@@ -376,7 +380,7 @@ class TS_RSP_Live_GUI(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyle("WindowsXP") 
+    app.setStyle("Fusion") 
     window = TS_RSP_Live_GUI()
     window.show()
     sys.exit(app.exec())
